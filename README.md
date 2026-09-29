@@ -1,28 +1,27 @@
 # Medicinal Plant Identification
 
-A computer-vision web app that identifies a plant from a leaf photograph. A **VGG19** Keras model
-does the classification; a small **Flask** app serves it.
+A computer-vision web app that identifies an **Ayurvedic medicinal plant** from a leaf photograph. A
+**VGG19** Keras model trained on **80 plant species** does the classification; a small **Flask** app
+serves it.
 
-Upload a leaf image, get a predicted class back.
+Upload a leaf image, get back the plant name and a confidence score.
 
-> ## ⚠️ This repo currently serves the *poultry* model
->
-> `app.py` loads **`plD_vgg19.h5`** and maps predictions to `cocci` / `healthy` / `ncd` / `salmo` —
-> which are **poultry disease** labels, not plants.
->
-> The actual 78-class Ayurvedic medicinal-plant model is **`model_2_vgg19.h5`**, trained by
-> [`ML_projects/Med_Plant_Detection/mePD2.py`](https://github.com/sreelekha-22/ML_projects/tree/main/Med_Plant_Detection)
-> on the `FMLd/` dataset (Tulsi, Neem, Amla, Turmeric, Ashoka, Brahmi and 73 more).
->
-> The `md.ipynb` notebook in this repo is the poultry training run. To make this repo match its
-> name, point `app.py` at `model_2_vgg19.h5` and replace the 4-entry label map with the 78-class
-> list. See [How the model is wired](#how-the-model-is-wired) below.
+## What it classifies
+
+The model recognises **80 species** — the Ayurvedic medicinals and common edible plants:
+
+Tulsi · Neem · Amla · Turmeric · Ashoka · Brahmi · Drumstick · Curry · Mango · Guava · Papaya ·
+Rose · Jasmine · Henna · Hibiscus · Lemon · Lemongrass · Mint · Marigold · Coconut-family and
+medicinal species, and more. The full ordered list lives in `CLASS_NAMES` in `app.py`.
+
+The four `cocci` / `healthy` / `ncd` / `salmo` labels this repo used to return were **poultry
+disease** classes — see [History](#history) below.
 
 ## How the model is wired
 
 ```
 leaf image  →  resize 224×224  →  scale by 1/255  →  ImageNet preprocess_input
-            →  VGG19 (plD_vgg19.h5)  →  argmax  →  class index  →  label
+            →  VGG19 (model_2_vgg19.h5)  →  argmax  →  class index  →  plant name
 ```
 
 In `app.py`:
@@ -31,24 +30,27 @@ In `app.py`:
 2. Loaded and resized to `224 × 224` — the size VGG19 expects
 3. Scaled by `1/255` and passed through `preprocess_input`
 4. Run through the trained model; `argmax` picks the winning class
-5. The class index is mapped to a label
+5. The index is looked up in `CLASS_NAMES`, and the top probability is returned as a confidence %
 
 ```python
-MODEL_PATH = 'plD_vgg19.h5'
-model = load_model(MODEL_PATH)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, 'model_2_vgg19.h5')
+
+idx = int(np.argmax(preds[0]))
+return {
+    'class_index': idx,
+    'class_name': CLASS_NAMES[idx],
+    'confidence': round(float(preds[0][idx]) * 100.0, 2),
+}
 ```
 
-| Class index | Label returned |
-|---|---|
-| 0 | `Class 1: cocci` |
-| 1 | `Class 2: healthy` |
-| 2 | `Class 3: ncd` |
-| 3 | `Class 4: salmo` |
+The model path resolves relative to `app.py`, so the app runs from any working directory. On startup
+the model output width is checked against `len(CLASS_NAMES)` and the app refuses to start on a
+mismatch — so a wrong-weights model fails loudly instead of returning nonsense labels.
 
-### Architecture the weights were trained with
+### Training architecture
 
-Both this repo's model and the plant model use the same shape — VGG19 with the classifier head
-removed and the backbone frozen, plus one dense softmax layer:
+VGG19 with the classifier head removed and the backbone frozen, plus one dense softmax layer:
 
 ```python
 vgg = VGG19(input_shape=[224, 224, 3], weights='imagenet', include_top=False)
@@ -59,8 +61,20 @@ prediction = Dense(len(folders), activation='softmax')(x)
 model = Model(inputs=vgg.input, outputs=prediction)
 ```
 
-So swapping in `model_2_vgg19.h5` is a two-line change: the `Dense` layer becomes `Dense(78)`, and
-the index→label map needs the full 78-entry list.
+`len(folders)` comes from `glob('FMLd/*')` — one folder per species, 80 of them. Trained with
+categorical crossentropy + Adam, `ImageDataGenerator` augmentation (rescale, shear 0.2, zoom 0.2,
+horizontal flip), an 80/20 split and `EarlyStopping` on `val_loss`.
+
+Training script: [`ML_projects/Med_Plant_Detection/mePD2.py`](https://github.com/sreelekha-22/ML_projects/tree/main/Med_Plant_Detection)
+
+## API
+
+| Method | Route | Response |
+|---|---|---|
+| `GET` | `/` | Upload page (`templates/index.html`) |
+| `POST` | `/predict` | `{ "class_index": 78, "class_name": "Turmeric", "confidence": 91.4 }` |
+
+A missing or empty file returns `400` with an explanatory message rather than a traceback.
 
 ## Tech stack
 
@@ -88,45 +102,45 @@ pip install -r requirements.txt
 
 ### The trained model
 
-`app.py` loads the weights at import time and **will fail to start without the `.h5` file**:
+`app.py` loads the weights at import time and **will fail to start without `model_2_vgg19.h5`**
+present next to it. The `.h5` is not committed, so either drop the file in, or retrain it:
 
-```python
-MODEL_PATH = 'plD_vgg19.h5'
-model = load_model(MODEL_PATH)
+```bash
+# in the training project, with the FMLd dataset in place
+python mePD2.py          # writes model_2_vgg19.h5
+# then copy it here
 ```
-
-The `.h5` is not committed. Either place it next to `app.py`, or retrain from the notebook and save
-it under that name.
 
 ### Run
 
 ```bash
-mkdir -p uploads
-python app.py
+python app.py            # creates uploads/ on first upload
 ```
 
 Open **http://localhost:5000** and upload a leaf image.
 
 > Runs with `debug=True`. Bind to a proper host and disable debug before exposing it anywhere.
 
-## Routes
-
-| Method | Route | Purpose |
-|---|---|---|
-| `GET` | `/` | Upload page (`templates/index.html`) |
-| `POST` | `/predict` | Save the upload, run inference, return the predicted class |
-
 ## Project layout
 
 ```
-├── app.py                     Flask app + VGG19 inference
+├── app.py                     Flask app + VGG19 inference + CLASS_NAMES
 ├── md.ipynb                   training / evaluation run
 ├── Untitled0.ipynb            exploratory analysis
 ├── requirements.txt           pinned environment
 ├── templates/                 Jinja2 views (base, index)
 ├── static/                    css + js
-└── uploads/                   uploaded images (create it; not committed)
+├── uploads/                   uploaded images (auto-created, not committed)
+└── model_2_vgg19.h5           trained weights (not committed)
 ```
+
+## History
+
+This app previously loaded **`plD_vgg19.h5`** and returned four poultry-disease labels (`cocci`,
+`healthy`, `ncd`, `salmo`) — weights trained on the `plD` dataset in
+[`ML_projects/Poultry_disease_detection`](https://github.com/sreelekha-22/ML_projects/tree/main/Poultry_disease_detection).
+That did not match what the repo name promises, so the app now loads the 80-species
+`model_2_vgg19.h5` instead. The poultry classifier remains available in the ML_projects repo.
 
 ## License
 

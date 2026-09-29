@@ -27,11 +27,38 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 
 # Model saved with Keras model.save()
-MODEL_PATH ='plD_vgg19.h5'
+# Trained by ML_projects/Med_Plant_Detection/mePD2.py on the FMLd dataset
+# (80 Ayurvedic medicinal plant species). Resolved relative to this file so the
+# app runs from any working directory.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, 'model_2_vgg19.h5')
+
+# Output order of Dense(80, softmax) -- must stay in step with the training script
+CLASS_NAMES = [
+    'Aloevera', 'Amla', 'Amruthaballi', 'Arali', 'ashoka', 'Astma_weed',
+    'Badipala', 'Balloon_Vine', 'Bamboo', 'Beans', 'Betel', 'Bhrami',
+    'Bringaraja', 'camphor', 'Caricature', 'Castor', 'Catharanthus', 'Chakte',
+    'Chilly', 'Citron lime (herelikai)', 'Coffee', 'Common rue(naagdalli)',
+    'Coriender', 'Curry', 'Doddpathre', 'Drumstick', 'Ekka', 'Eucalyptus',
+    'Ganigale', 'Ganike', 'Gasagase', 'Ginger', 'Globe Amarnath', 'Guava',
+    'Henna', 'Hibiscus', 'Honge', 'Insulin', 'Jackfruit', 'Jasmine',
+    'kamakasturi', 'Kambajala', 'Kasambruga', 'kepala', 'Kohlrabi', 'Lantana',
+    'Lemon', 'Lemongrass', 'Malabar_Nut', 'Malabar_Spinach', 'Mango',
+    'Marigold', 'Mint', 'Neem', 'Nelavembu', 'Nerale', 'Nooni', 'Onion',
+    'Padri', 'Palak(Spinach)', 'Papaya', 'Parijatha', 'Pea', 'Pepper',
+    'Pomoegranate', 'Pumpkin', 'Raddish', 'Rose', 'Sampige', 'Sapota',
+    'Seethaashoka', 'Seethapala', 'Spinach1', 'Tamarind', 'Taro', 'Tecoma',
+    'Thumbe', 'Tomato', 'Tulsi', 'Turmeric',
+]
 
 # Load your trained model
 model = load_model(MODEL_PATH)
 
+if model.output_shape[-1] != len(CLASS_NAMES):
+    raise RuntimeError(
+        'Model expects %d classes but CLASS_NAMES has %d entries.'
+        % (model.output_shape[-1], len(CLASS_NAMES))
+    )
 
 
 
@@ -45,26 +72,21 @@ def model_predict(img_path, model):
     ## Scaling
     x=x/255
     x = np.expand_dims(x, axis=0)
-   
+
 
     # Be careful how your trained model deals with the input
     # otherwise, it won't make correct prediction!
     x = preprocess_input(x)
     preds = model.predict(x)
-    preds = np.argmax(preds, axis=1)
+    idx = int(np.argmax(preds[0]))
+    confidence = float(preds[0][idx]) * 100.0
 
-    result = []
-    for pred in preds:
-        if pred == 0:
-            result.append("Class 1: cocci")
-        elif pred == 1:
-            result.append("Class 2: healthy")
-        elif pred == 2:
-            result.append("Class 3: ncd")
-        elif pred == 3:
-            result.append("Class 4: salmo")
+    return {
+        'class_index': idx,
+        'class_name': CLASS_NAMES[idx],
+        'confidence': round(confidence, 2),
+    }
 
-    return result
 
     # preds = model.predict(x)
     # preds=np.argmax(preds, axis=1)
@@ -88,18 +110,19 @@ def index():
 def upload():
     if request.method == 'POST':
         # Get the file from post request
-        f = request.files['file']
+        f = request.files.get('file')
+        if f is None or f.filename == '':
+            return {'error': 'No file uploaded. Attach an image under the "file" field.'}, 400
 
         # Save the file to ./uploads
-        basepath = os.path.dirname(__file__)
-        file_path = os.path.join(
-            basepath, 'uploads', secure_filename(f.filename))
+        basepath = os.path.dirname(os.path.abspath(__file__))
+        upload_dir = os.path.join(basepath, 'uploads')
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, secure_filename(f.filename))
         f.save(file_path)
 
         # Make prediction
-        preds = model_predict(file_path, model)
-        result=preds
-        return result
+        return model_predict(file_path, model)
     return None
 
 
